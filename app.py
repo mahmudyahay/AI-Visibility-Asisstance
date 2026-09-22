@@ -1,6 +1,4 @@
 import base64
-import time
-
 import cv2
 import numpy as np
 import streamlit as st
@@ -26,45 +24,45 @@ st.title("👁️ AI Accessibility Assistant")
 st.subheader("Aspect 1 — Real-Time Object Awareness")
 
 st.write(
-    "Point your camera at an object. "
-    "YOLO will detect it automatically."
+    "Point your camera at your surroundings. "
+    "The AI will detect visible objects."
 )
 
 
 # ============================================================
-# LOAD YOLO ONCE
+# YOLO
 # ============================================================
 
 @st.cache_resource
-def load_yolo():
+def load_model():
 
-    model = YOLO("yolo11n.pt")
-
-    return model
+    return YOLO("yolo11n.pt")
 
 
-model = load_yolo()
+model = load_model()
 
 
 # ============================================================
 # CAMERA COMPONENT
 # ============================================================
 
-camera = st.components.v2.component(
+camera_component = st.components.v2.component(
 
-    name="ai_accessibility_live_camera",
+    name="stable_accessibility_camera",
 
     html="""
-    <div class="camera-wrapper">
+    <div id="camera-root">
 
         <video
-            id="camera"
+            id="camera-video"
             autoplay
             playsinline
             muted
         ></video>
 
-        <canvas id="canvas"></canvas>
+        <canvas
+            id="capture-canvas"
+        ></canvas>
 
         <div id="camera-status">
             Starting camera...
@@ -74,7 +72,7 @@ camera = st.components.v2.component(
     """,
 
     css="""
-    .camera-wrapper {
+    #camera-root {
 
         width: 100%;
         max-width: 900px;
@@ -83,7 +81,7 @@ camera = st.components.v2.component(
 
         position: relative;
 
-        background: black;
+        background: #000;
 
         border-radius: 14px;
 
@@ -91,15 +89,19 @@ camera = st.components.v2.component(
     }
 
 
-    #camera {
+    #camera-video {
 
         width: 100%;
 
+        height: auto;
+
         display: block;
+
+        background: #000;
     }
 
 
-    #canvas {
+    #capture-canvas {
 
         display: none;
     }
@@ -110,19 +112,20 @@ camera = st.components.v2.component(
         position: absolute;
 
         left: 12px;
+
         bottom: 12px;
 
         padding: 8px 12px;
 
-        background: rgba(0,0,0,0.75);
+        border-radius: 8px;
+
+        background: rgba(0, 0, 0, 0.75);
 
         color: white;
 
-        border-radius: 8px;
+        font-family: Arial, sans-serif;
 
         font-size: 14px;
-
-        font-family: Arial, sans-serif;
     }
     """,
 
@@ -135,47 +138,93 @@ camera = st.components.v2.component(
         } = component;
 
 
+        // ====================================================
+        // IMPORTANT:
+        //
+        // Streamlit can rerun Python when a frame is sent.
+        //
+        // We therefore store the camera controller directly
+        // on the DOM element.
+        //
+        // If the component runs again, we DO NOT create
+        // another camera or another capture loop.
+        // ====================================================
+
+        if (parentElement.__cameraController) {
+
+            return;
+        }
+
+
         const video =
-            parentElement.querySelector("#camera");
+            parentElement.querySelector(
+                "#camera-video"
+            );
+
 
         const canvas =
-            parentElement.querySelector("#canvas");
+            parentElement.querySelector(
+                "#capture-canvas"
+            );
+
 
         const status =
-            parentElement.querySelector("#camera-status");
+            parentElement.querySelector(
+                "#camera-status"
+            );
 
 
         const context =
             canvas.getContext("2d");
 
 
-        let stream = null;
+        // ====================================================
+        // CAMERA CONTROLLER
+        // ====================================================
 
-        let timer = null;
+        const controller = {
 
-        let running = true;
+            stream: null,
+
+            timer: null,
+
+            running: true,
+
+            busy: false,
+
+            lastFrameTime: 0,
+
+        };
+
+
+        parentElement.__cameraController =
+            controller;
 
 
         // ====================================================
-        // START CAMERA
+        // CAMERA START
         // ====================================================
 
         async function startCamera() {
 
+            if (!controller.running) {
+                return;
+            }
+
+
+            status.textContent =
+                "Starting rear camera...";
+
+
             try {
 
-                status.textContent =
-                    "Starting rear camera...";
-
-
                 // ------------------------------------------------
-                // Rear/environment camera
+                // Prefer environment/rear camera
                 // ------------------------------------------------
 
-                try {
-
-                    stream =
-                        await navigator.mediaDevices.getUserMedia({
+                controller.stream =
+                    await navigator.mediaDevices
+                        .getUserMedia({
 
                             audio: false,
 
@@ -191,171 +240,279 @@ camera = st.components.v2.component(
 
                                 height: {
                                     ideal: 480
-                                }
-                            }
-                        });
-
-                }
-
-                catch (rearError) {
-
-                    console.log(
-                        "Environment camera unavailable.",
-                        rearError
-                    );
-
-
-                    // --------------------------------------------
-                    // Desktop/front-camera fallback
-                    // --------------------------------------------
-
-                    stream =
-                        await navigator.mediaDevices.getUserMedia({
-
-                            audio: false,
-
-                            video: {
-
-                                width: {
-                                    ideal: 640
                                 },
 
-                                height: {
-                                    ideal: 480
+                                frameRate: {
+                                    ideal: 15,
+
+                                    max: 20
                                 }
                             }
                         });
-                }
 
-
-                // ------------------------------------------------
-                // Attach camera
-                // ------------------------------------------------
-
-                video.srcObject = stream;
-
-                await video.play();
-
-
-                status.textContent =
-                    "✓ Camera active";
-
-
-                // ------------------------------------------------
-                // Start frame transmission
-                // ------------------------------------------------
-
-                sendFrame();
 
             }
 
             catch (error) {
 
-                console.error(
-                    "Camera error:",
+                console.log(
+                    "Rear camera request failed:",
                     error
                 );
 
 
-                status.textContent =
-                    "❌ Unable to access camera";
+                try {
+
+                    // --------------------------------------------
+                    // Fallback
+                    // --------------------------------------------
+
+                    controller.stream =
+                        await navigator.mediaDevices
+                            .getUserMedia({
+
+                                audio: false,
+
+                                video: {
+
+                                    width: {
+                                        ideal: 640
+                                    },
+
+                                    height: {
+                                        ideal: 480
+                                    }
+                                }
+                            });
+
+                }
+
+                catch (fallbackError) {
+
+                    console.error(
+                        "Camera unavailable:",
+                        fallbackError
+                    );
+
+
+                    status.textContent =
+                        "❌ Camera unavailable";
+
+                    return;
+                }
             }
+
+
+            // ====================================================
+            // CONNECT STREAM
+            // ====================================================
+
+            video.srcObject =
+                controller.stream;
+
+
+            try {
+
+                await video.play();
+
+            }
+
+            catch (playError) {
+
+                console.error(
+                    "Video play error:",
+                    playError
+                );
+
+            }
+
+
+            status.textContent =
+                "✓ Camera active";
+
+
+            // ====================================================
+            // WAIT UNTIL CAMERA HAS REAL DIMENSIONS
+            // ====================================================
+
+            waitForVideo();
         }
 
 
         // ====================================================
-        // SEND FRAME TO PYTHON
+        // WAIT FOR VIDEO
         // ====================================================
 
-        function sendFrame() {
+        function waitForVideo() {
 
-            if (!running) {
+            if (!controller.running) {
                 return;
             }
 
 
             if (
-                video.readyState >=
-                HTMLMediaElement.HAVE_CURRENT_DATA
+                video.videoWidth > 0 &&
+                video.videoHeight > 0
             ) {
 
-                // --------------------------------------------
-                // Use actual video dimensions when available
-                // --------------------------------------------
+                captureFrame();
 
-                const width =
-                    video.videoWidth || 640;
-
-                const height =
-                    video.videoHeight || 480;
+                return;
+            }
 
 
-                // --------------------------------------------
-                // Keep transmission manageable
-                // --------------------------------------------
-
-                const targetWidth = 640;
-
-                const targetHeight =
-                    Math.round(
-                        height *
-                        (targetWidth / width)
-                    );
+            setTimeout(
+                waitForVideo,
+                300
+            );
+        }
 
 
-                canvas.width =
-                    targetWidth;
+        // ====================================================
+        // CAPTURE ONE FRAME
+        // ====================================================
 
-                canvas.height =
-                    targetHeight;
+        function captureFrame() {
 
-
-                // --------------------------------------------
-                // Draw current camera frame
-                // --------------------------------------------
-
-                context.drawImage(
-
-                    video,
-
-                    0,
-                    0,
-
-                    targetWidth,
-                    targetHeight
-                );
-
-
-                // --------------------------------------------
-                // JPEG
-                // --------------------------------------------
-
-                const image =
-                    canvas.toDataURL(
-                        "image/jpeg",
-                        0.75
-                    );
-
-
-                // --------------------------------------------
-                // Send current frame to Python
-                // --------------------------------------------
-
-                setStateValue(
-                    "frame",
-                    image
-                );
+            if (!controller.running) {
+                return;
             }
 
 
             // ------------------------------------------------
-            // 4 frames/second
+            // Don't send another frame while one is already
+            // being processed by Streamlit.
             // ------------------------------------------------
 
-            timer =
+            if (controller.busy) {
+
+                controller.timer =
+                    setTimeout(
+                        captureFrame,
+                        500
+                    );
+
+                return;
+            }
+
+
+            if (
+                video.readyState <
+                HTMLMediaElement.HAVE_CURRENT_DATA
+            ) {
+
+                controller.timer =
+                    setTimeout(
+                        captureFrame,
+                        500
+                    );
+
+                return;
+            }
+
+
+            // =================================================
+            // FRAME SIZE
+            // =================================================
+
+            const sourceWidth =
+                video.videoWidth || 640;
+
+
+            const sourceHeight =
+                video.videoHeight || 480;
+
+
+            const targetWidth = 640;
+
+
+            const targetHeight =
+                Math.round(
+
+                    sourceHeight *
+                    (
+                        targetWidth /
+                        sourceWidth
+                    )
+                );
+
+
+            canvas.width =
+                targetWidth;
+
+
+            canvas.height =
+                targetHeight;
+
+
+            // =================================================
+            // DRAW CAMERA FRAME
+            // =================================================
+
+            context.drawImage(
+
+                video,
+
+                0,
+                0,
+
+                targetWidth,
+                targetHeight
+            );
+
+
+            // =================================================
+            // JPEG
+            // =================================================
+
+            const image =
+                canvas.toDataURL(
+                    "image/jpeg",
+                    0.72
+                );
+
+
+            // =================================================
+            // SEND TO PYTHON
+            // =================================================
+
+            controller.busy = true;
+
+
+            setStateValue(
+                "frame",
+                image
+            );
+
+
+            controller.lastFrameTime =
+                Date.now();
+
+
+            // =================================================
+            // NEXT FRAME
+            //
+            // 1 frame every ~1.5 seconds.
+            //
+            // That's ~6–7 frames / 10 seconds.
+            //
+            // More than your minimum of 3 / 10 seconds,
+            // while keeping Streamlit/YOLO workload reasonable.
+            // =================================================
+
+            controller.timer =
                 setTimeout(
-                    sendFrame,
-                    250
+
+                    () => {
+
+                        controller.busy =
+                            false;
+
+                        captureFrame();
+
+                    },
+
+                    1500
                 );
         }
 
@@ -373,23 +530,29 @@ camera = st.components.v2.component(
 
         return () => {
 
-            running = false;
+            controller.running =
+                false;
 
 
-            if (timer) {
+            if (controller.timer) {
 
-                clearTimeout(timer);
+                clearTimeout(
+                    controller.timer
+                );
             }
 
 
-            if (stream) {
+            if (controller.stream) {
 
-                stream
+                controller.stream
                     .getTracks()
                     .forEach(
                         track => track.stop()
                     );
             }
+
+
+            delete parentElement.__cameraController;
         };
     }
     """,
@@ -397,12 +560,16 @@ camera = st.components.v2.component(
 
 
 # ============================================================
-# MOUNT CAMERA
+# MOUNT COMPONENT
 # ============================================================
 
-camera_result = camera(
+camera_result = camera_component(
 
     key="accessibility_camera",
+
+    default={
+        "frame": None
+    },
 
     on_frame_change=lambda: None,
 )
@@ -418,45 +585,58 @@ frame_data = camera_result.frame
 if not frame_data:
 
     st.info(
-        "Starting camera and waiting for first frame..."
+        "📷 Starting camera and waiting for first frame..."
     )
 
     st.stop()
 
 
 # ============================================================
-# DECODE FRAME
+# CAMERA FRAME RECEIVED
+# ============================================================
+
+st.success(
+    "🟢 Camera frame received — running YOLO..."
+)
+
+
+# ============================================================
+# DECODE JPEG
 # ============================================================
 
 try:
 
     if "," in frame_data:
 
-        image_data = frame_data.split(
-            ",",
-            1
-        )[1]
+        encoded =
+            frame_data.split(
+                ",",
+                1
+            )[1]
 
     else:
 
-        image_data = frame_data
+        encoded = frame_data
 
 
-    image_bytes = base64.b64decode(
-        image_data
-    )
+    image_bytes =
+        base64.b64decode(
+            encoded
+        )
 
 
-    image_array = np.frombuffer(
-        image_bytes,
-        dtype=np.uint8
-    )
+    image_array =
+        np.frombuffer(
+            image_bytes,
+            dtype=np.uint8
+        )
 
 
-    frame = cv2.imdecode(
-        image_array,
-        cv2.IMREAD_COLOR
-    )
+    frame =
+        cv2.imdecode(
+            image_array,
+            cv2.IMREAD_COLOR
+        )
 
 
 except Exception as error:
@@ -473,21 +653,21 @@ except Exception as error:
 
 
 # ============================================================
-# VERIFY IMAGE
+# VALIDATE FRAME
 # ============================================================
 
 if frame is None:
 
     st.error(
-        "Camera frame arrived, but OpenCV "
-        "could not decode the image."
+        "The camera frame arrived, "
+        "but OpenCV could not decode it."
     )
 
     st.stop()
 
 
 # ============================================================
-# YOLO INFERENCE
+# YOLO
 # ============================================================
 
 try:
@@ -498,7 +678,7 @@ try:
 
         imgsz=640,
 
-        conf=0.15,
+        conf=0.20,
 
         iou=0.45,
 
@@ -522,48 +702,43 @@ except Exception as error:
 
 
 # ============================================================
-# GET YOLO RESULT
+# RESULT
 # ============================================================
 
 result = results[0]
 
 
 # ============================================================
-# CREATE OUTPUT IMAGE
+# OUTPUT IMAGE
 # ============================================================
 
-output = frame.copy()
+annotated =
+    frame.copy()
 
-
-# ============================================================
-# DETECTIONS
-# ============================================================
 
 detections = []
 
 
-if result.boxes is not None:
+# ============================================================
+# PROCESS BOXES
+# ============================================================
 
-    boxes = result.boxes
+if (
+    result.boxes is not None
+    and len(result.boxes) > 0
+):
 
-
-    for i in range(
-        len(boxes)
-    ):
+    for box in result.boxes:
 
         # ----------------------------------------------------
         # Coordinates
         # ----------------------------------------------------
 
-        coordinates = (
-            boxes.xyxy[i]
+        x1, y1, x2, y2 = (
+
+            box.xyxy[0]
             .cpu()
             .numpy()
-        )
-
-
-        x1, y1, x2, y2 = (
-            coordinates
             .astype(int)
         )
 
@@ -573,7 +748,8 @@ if result.boxes is not None:
         # ----------------------------------------------------
 
         confidence = float(
-            boxes.conf[i]
+
+            box.conf[0]
             .cpu()
             .item()
         )
@@ -584,7 +760,8 @@ if result.boxes is not None:
         # ----------------------------------------------------
 
         class_id = int(
-            boxes.cls[i]
+
+            box.cls[0]
             .cpu()
             .item()
         )
@@ -594,28 +771,25 @@ if result.boxes is not None:
         # Name
         # ----------------------------------------------------
 
-        name = str(
-            model.names[class_id]
-        )
+        name =
+            model.names[
+                class_id
+            ]
 
-
-        # ----------------------------------------------------
-        # Save detection
-        # ----------------------------------------------------
 
         detections.append({
 
             "name": name,
 
-            "confidence": confidence,
+            "confidence":
+                confidence,
 
-            "x1": x1,
-
-            "y1": y1,
-
-            "x2": x2,
-
-            "y2": y2,
+            "box": (
+                x1,
+                y1,
+                x2,
+                y2
+            )
         })
 
 
@@ -625,7 +799,7 @@ if result.boxes is not None:
 
         cv2.rectangle(
 
-            output,
+            annotated,
 
             (x1, y1),
 
@@ -633,7 +807,7 @@ if result.boxes is not None:
 
             (0, 255, 0),
 
-            3,
+            3
         )
 
 
@@ -641,10 +815,8 @@ if result.boxes is not None:
         # LABEL
         # ====================================================
 
-        label = (
-            f"{name} "
-            f"{confidence:.0%}"
-        )
+        label =
+            f"{name} {confidence:.0%}"
 
 
         (
@@ -658,52 +830,48 @@ if result.boxes is not None:
 
             0.7,
 
-            2,
+            2
         )
 
 
-        label_top = max(
-            0,
-            y1 - text_height - 12
-        )
+        label_top =
+            max(
+                0,
+                y1 -
+                text_height -
+                12
+            )
 
-
-        label_bottom = y1
-
-
-        # ----------------------------------------------------
-        # Label background
-        # ----------------------------------------------------
 
         cv2.rectangle(
 
-            output,
+            annotated,
 
             (x1, label_top),
 
             (
-                x1 + text_width + 12,
-                label_bottom
+                x1 +
+                text_width +
+                12,
+
+                y1
             ),
 
             (0, 255, 0),
 
-            -1,
+            -1
         )
 
 
-        # ----------------------------------------------------
-        # Label text
-        # ----------------------------------------------------
-
         cv2.putText(
 
-            output,
+            annotated,
 
             label,
 
             (
                 x1 + 6,
+
                 y1 - 6
             ),
 
@@ -715,59 +883,70 @@ if result.boxes is not None:
 
             2,
 
-            cv2.LINE_AA,
+            cv2.LINE_AA
         )
 
 
 # ============================================================
-# DETECTION DISPLAY
+# DISPLAY RESULT
 # ============================================================
 
-st.subheader("🔎 Live YOLO Detection")
-
-
-output_rgb = cv2.cvtColor(
-    output,
-    cv2.COLOR_BGR2RGB
+st.subheader(
+    "🔎 YOLO Detection"
 )
+
+
+annotated_rgb =
+    cv2.cvtColor(
+
+        annotated,
+
+        cv2.COLOR_BGR2RGB
+    )
 
 
 st.image(
 
-    output_rgb,
+    annotated_rgb,
 
     channels="RGB",
 
-    use_container_width=True,
+    use_container_width=True
 )
 
 
 # ============================================================
-# OBJECT LIST
+# OBJECTS
 # ============================================================
 
-st.subheader("Objects Detected")
+st.subheader(
+    "Objects Detected"
+)
 
 
-if len(detections) == 0:
-
-    st.info(
-        "No objects detected in the current frame."
-    )
-
-else:
+if detections:
 
     for index, detection in enumerate(
+
         detections,
+
         start=1
     ):
 
         st.write(
+
             f"**{index}. "
             f"{detection['name'].capitalize()}** "
             f"— "
             f"{detection['confidence']:.1%}"
         )
+
+else:
+
+    st.info(
+        "No recognizable objects "
+        "were detected in this frame."
+    )
 
 
 # ============================================================
@@ -775,8 +954,9 @@ else:
 # ============================================================
 
 st.caption(
+
     f"Camera ✓  |  "
     f"Python ✓  |  "
     f"YOLO ✓  |  "
-    f"Detections: {len(detections)}"
+    f"{len(detections)} object(s) detected"
 )
