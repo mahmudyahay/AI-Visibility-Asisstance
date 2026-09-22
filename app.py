@@ -26,13 +26,13 @@ st.title("👁️ AI Accessibility Assistant")
 st.subheader("Aspect 1 — Real-Time Object Awareness")
 
 st.write(
-    "Point your camera at your surroundings. "
-    "The system continuously detects visible objects."
+    "Point the camera at your surroundings. "
+    "YOLO will detect the objects in view."
 )
 
 
 # ============================================================
-# LOAD YOLO MODEL
+# LOAD YOLO
 # ============================================================
 
 @st.cache_resource
@@ -48,7 +48,11 @@ model = load_model()
 # ============================================================
 
 camera_component = st.components.v2.component(
-    name="live_camera",
+    name="live_rear_camera",
+
+    # --------------------------------------------------------
+    # HTML
+    # --------------------------------------------------------
 
     html="""
     <div id="camera-container">
@@ -60,14 +64,20 @@ camera_component = st.components.v2.component(
             muted
         ></video>
 
-        <canvas id="canvas"></canvas>
+        <canvas
+            id="canvas"
+        ></canvas>
 
         <div id="status">
-            Starting rear camera...
+            Starting camera...
         </div>
 
     </div>
     """,
+
+    # --------------------------------------------------------
+    # CSS
+    # --------------------------------------------------------
 
     css="""
     #camera-container {
@@ -75,7 +85,7 @@ camera_component = st.components.v2.component(
         max-width: 900px;
         margin: 0 auto;
         position: relative;
-        background: black;
+        background: #000;
         border-radius: 12px;
         overflow: hidden;
     }
@@ -92,22 +102,32 @@ camera_component = st.components.v2.component(
 
     #status {
         position: absolute;
-        bottom: 10px;
-        left: 10px;
-        background: rgba(0, 0, 0, 0.7);
+        left: 12px;
+        bottom: 12px;
+
+        background: rgba(0, 0, 0, 0.75);
         color: white;
-        padding: 7px 11px;
+
+        padding: 7px 12px;
         border-radius: 7px;
+
         font-family: Arial, sans-serif;
         font-size: 14px;
     }
     """,
 
+    # --------------------------------------------------------
+    # JAVASCRIPT
+    # --------------------------------------------------------
+
     js="""
     export default function(component) {
 
-        const parentElement = component.parentElement;
-        const setStateValue = component.setStateValue;
+        const {
+            parentElement,
+            setTriggerValue
+        } = component;
+
 
         const video =
             parentElement.querySelector("#camera");
@@ -121,7 +141,9 @@ camera_component = st.components.v2.component(
         const ctx =
             canvas.getContext("2d");
 
+
         let stream = null;
+
         let running = true;
 
 
@@ -137,13 +159,17 @@ camera_component = st.components.v2.component(
                     "Requesting rear camera...";
 
 
-                // Try rear/environment camera first.
+                /*
+                 * Request the BACK camera.
+                 */
 
                 stream =
                     await navigator.mediaDevices.getUserMedia({
+
                         audio: false,
 
                         video: {
+
                             facingMode: {
                                 exact: "environment"
                             },
@@ -168,13 +194,16 @@ camera_component = st.components.v2.component(
 
                 await video.play();
 
+
                 status.textContent =
                     "✓ Rear camera active";
 
 
                 startCapture();
 
-            } catch (error) {
+            }
+
+            catch (error) {
 
                 console.log(
                     "Rear camera unavailable:",
@@ -182,7 +211,10 @@ camera_component = st.components.v2.component(
                 );
 
 
-                // Fallback camera.
+                /*
+                 * Fallback for computers without
+                 * an environment/rear camera.
+                 */
 
                 try {
 
@@ -193,15 +225,22 @@ camera_component = st.components.v2.component(
 
                     stream =
                         await navigator.mediaDevices.getUserMedia({
+
                             audio: false,
 
                             video: {
+
                                 width: {
                                     ideal: 640
                                 },
 
                                 height: {
                                     ideal: 480
+                                },
+
+                                frameRate: {
+                                    ideal: 15,
+                                    max: 20
                                 }
                             }
                         });
@@ -211,28 +250,30 @@ camera_component = st.components.v2.component(
 
                     await video.play();
 
+
                     status.textContent =
                         "✓ Camera active";
 
 
                     startCapture();
 
-                } catch (fallbackError) {
+                }
+
+                catch (fallbackError) {
 
                     console.error(
                         fallbackError
                     );
 
                     status.textContent =
-                        "❌ Camera access failed. "
-                        + "Allow camera permission.";
+                        "❌ Camera permission denied";
                 }
             }
         }
 
 
         // ====================================================
-        // CAPTURE FRAMES
+        // CAPTURE FRAME
         // ====================================================
 
         function startCapture() {
@@ -249,6 +290,10 @@ camera_component = st.components.v2.component(
                     HTMLMediaElement.HAVE_CURRENT_DATA
                 ) {
 
+                    /*
+                     * Capture at 640 × 480.
+                     */
+
                     canvas.width = 640;
                     canvas.height = 480;
 
@@ -262,6 +307,10 @@ camera_component = st.components.v2.component(
                     );
 
 
+                    /*
+                     * Convert the frame to JPEG.
+                     */
+
                     const image =
                         canvas.toDataURL(
                             "image/jpeg",
@@ -269,14 +318,25 @@ camera_component = st.components.v2.component(
                         );
 
 
-                    setStateValue(
+                    /*
+                     * IMPORTANT:
+                     *
+                     * A camera frame is an EVENT.
+                     * Therefore we use a trigger,
+                     * not persistent state.
+                     */
+
+                    setTriggerValue(
                         "frame",
                         image
                     );
                 }
 
 
-                // Approximately 5 FPS.
+                /*
+                 * Send approximately 5 frames
+                 * per second.
+                 */
 
                 setTimeout(
                     capture,
@@ -290,7 +350,7 @@ camera_component = st.components.v2.component(
 
 
         // ====================================================
-        // START
+        // START CAMERA
         // ====================================================
 
         startCamera();
@@ -320,51 +380,63 @@ camera_component = st.components.v2.component(
 
 
 # ============================================================
-# MOUNT CAMERA
+# MOUNT COMPONENT
 # ============================================================
 
 camera_result = camera_component(
-    key="accessibility_camera",
 
-    default={
-        "frame": None
-    },
+    key="accessibility_camera",
 
     on_frame_change=lambda: None,
 )
 
 
 # ============================================================
-# GET CURRENT FRAME
+# GET FRAME FROM COMPONENT
 # ============================================================
 
 frame_data = camera_result.frame
 
 
 # ============================================================
-# PROCESS FRAME
+# SHOW COMMUNICATION STATUS
 # ============================================================
 
 if frame_data:
 
+    st.caption("🟢 Camera frame received by Python")
+
+
     try:
 
-        # Remove the Base64 prefix.
+        # ----------------------------------------------------
+        # Remove Base64 header
+        # ----------------------------------------------------
 
-        encoded_image = frame_data.split(
-            ",",
-            1
-        )[1]
+        if "," in frame_data:
+
+            encoded_image = frame_data.split(
+                ",",
+                1
+            )[1]
+
+        else:
+
+            encoded_image = frame_data
 
 
-        # Base64 → bytes.
+        # ----------------------------------------------------
+        # Base64 → bytes
+        # ----------------------------------------------------
 
         image_bytes = base64.b64decode(
             encoded_image
         )
 
 
-        # Bytes → NumPy.
+        # ----------------------------------------------------
+        # Bytes → NumPy
+        # ----------------------------------------------------
 
         image_array = np.frombuffer(
             image_bytes,
@@ -372,7 +444,9 @@ if frame_data:
         )
 
 
-        # JPEG → OpenCV frame.
+        # ----------------------------------------------------
+        # JPEG → OpenCV
+        # ----------------------------------------------------
 
         frame = cv2.imdecode(
             image_array,
@@ -380,16 +454,28 @@ if frame_data:
         )
 
 
-        if frame is not None:
+        if frame is None:
+
+            st.error(
+                "Python received the frame, "
+                "but OpenCV could not decode it."
+            )
+
+        else:
 
             # =================================================
-            # YOLO DETECTION
+            # YOLO
             # =================================================
 
             results = model(
                 frame,
+
+                # Keep 640 for accuracy.
                 imgsz=640,
+
+                # Confidence threshold.
                 conf=0.35,
+
                 verbose=False,
             )
 
@@ -401,13 +487,15 @@ if frame_data:
             # DRAW BOUNDING BOXES
             # =================================================
 
-            annotated = result.plot()
+            annotated_frame = result.plot()
 
 
-            # OpenCV BGR → Streamlit RGB.
+            # =================================================
+            # BGR → RGB
+            # =================================================
 
-            annotated = cv2.cvtColor(
-                annotated,
+            annotated_frame = cv2.cvtColor(
+                annotated_frame,
                 cv2.COLOR_BGR2RGB
             )
 
@@ -416,12 +504,11 @@ if frame_data:
             # DISPLAY
             # =================================================
 
-            st.subheader(
-                "🔎 Live Detection"
-            )
+            st.subheader("🔎 Live Detection")
+
 
             st.image(
-                annotated,
+                annotated_frame,
                 channels="RGB",
                 use_container_width=True,
             )
@@ -431,9 +518,7 @@ if frame_data:
             # OBJECT LIST
             # =================================================
 
-            st.subheader(
-                "Objects Detected"
-            )
+            st.subheader("Objects Detected")
 
 
             if (
@@ -441,45 +526,75 @@ if frame_data:
                 and len(result.boxes) > 0
             ):
 
-                for index, box in enumerate(
-                    result.boxes,
-                    start=1
-                ):
+                detected_objects = []
+
+
+                for box in result.boxes:
 
                     class_id = int(
                         box.cls[0].item()
                     )
 
+
                     confidence = float(
                         box.conf[0].item()
                     )
+
 
                     object_name = model.names[
                         class_id
                     ]
 
+
+                    detected_objects.append(
+                        (
+                            object_name,
+                            confidence
+                        )
+                    )
+
+
+                # ------------------------------------------------
+                # PRINT EACH OBJECT
+                # ------------------------------------------------
+
+                for index, (
+                    name,
+                    confidence
+                ) in enumerate(
+                    detected_objects,
+                    start=1
+                ):
+
                     st.write(
                         f"**{index}. "
-                        f"{object_name.capitalize()}** "
+                        f"{name.capitalize()}** "
                         f"— {confidence:.1%}"
                     )
+
 
             else:
 
                 st.info(
-                    "No objects detected."
+                    "No objects detected in this frame."
                 )
 
 
     except Exception as error:
 
         st.error(
-            "Frame processing error"
+            "YOLO processing error"
         )
 
         st.code(
             str(error)
         )
+
+else:
+
+    st.info(
+        "Waiting for the first camera frame..."
+    )
 
 
 # ============================================================
@@ -489,7 +604,6 @@ if frame_data:
 st.divider()
 
 st.caption(
-    "Rear Camera → Live Frames → "
-    "OpenCV → YOLO → Bounding Boxes → "
-    "Object List"
+    "Rear Camera → Frame → OpenCV → "
+    "YOLO → Bounding Boxes → Object List"
 )
