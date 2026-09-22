@@ -1,11 +1,11 @@
 import cv2
 import streamlit as st
 from ultralytics import YOLO
-from PIL import Image
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
 
 
 # --------------------------------------------------
-# 1. PAGE CONFIGURATION
+# PAGE CONFIGURATION
 # --------------------------------------------------
 
 st.set_page_config(
@@ -16,7 +16,7 @@ st.set_page_config(
 
 
 # --------------------------------------------------
-# 2. APPLICATION TITLE
+# TITLE
 # --------------------------------------------------
 
 st.title("👁️ AI Accessibility Assistant")
@@ -26,13 +26,12 @@ st.write(
 )
 
 st.info(
-    "Point your camera at objects around you. "
-    "The system will detect and label them."
+    "Start the camera and point it at objects around you."
 )
 
 
 # --------------------------------------------------
-# 3. LOAD YOLO MODEL
+# LOAD YOLO MODEL
 # --------------------------------------------------
 
 @st.cache_resource
@@ -45,132 +44,71 @@ model = load_model()
 
 
 # --------------------------------------------------
-# 4. CAMERA INPUT
+# VIDEO PROCESSOR
 # --------------------------------------------------
 
-camera_image = st.camera_input(
-    "Take a picture with your camera"
-)
+class ObjectDetectionProcessor(VideoProcessorBase):
 
+    def recv(self, frame):
 
-# --------------------------------------------------
-# 5. PROCESS IMAGE
-# --------------------------------------------------
+        # Convert video frame to OpenCV format
+        img = frame.to_ndarray(format="bgr24")
 
-if camera_image is not None:
+        # Run YOLO detection
+        results = model(img)
 
-    # Read the uploaded camera image
-    image = Image.open(camera_image)
+        # Draw bounding boxes
+        annotated_frame = results[0].plot()
 
-    # Convert PIL image to OpenCV format
-    frame = cv2.cvtColor(
-        __import__("numpy").array(image),
-        cv2.COLOR_RGB2BGR
-    )
-
-
-    # --------------------------------------------------
-    # 6. RUN YOLO DETECTION
-    # --------------------------------------------------
-
-    results = model(frame)
-
-
-    # --------------------------------------------------
-    # 7. DRAW DETECTIONS
-    # --------------------------------------------------
-
-    annotated_frame = results[0].plot()
-
-
-    # --------------------------------------------------
-    # 8. DISPLAY DETECTED IMAGE
-    # --------------------------------------------------
-
-    st.subheader("Detected Objects")
-
-    st.image(
-        cv2.cvtColor(
+        # Return processed frame
+        return av.VideoFrame.from_ndarray(
             annotated_frame,
-            cv2.COLOR_BGR2RGB
-        ),
-        channels="RGB"
-    )
-
-
-    # --------------------------------------------------
-    # 9. EXTRACT DETECTION INFORMATION
-    # --------------------------------------------------
-
-    boxes = results[0].boxes
-
-    if boxes is not None and len(boxes) > 0:
-
-        st.subheader("Objects Detected")
-
-        detected_objects = []
-
-        for box in boxes:
-
-            # Class ID
-            class_id = int(
-                box.cls[0].item()
-            )
-
-            # Confidence
-            confidence = float(
-                box.conf[0].item()
-            )
-
-            # Object name
-            object_name = model.names[class_id]
-
-            detected_objects.append(
-                (object_name, confidence)
-            )
-
-
-        # --------------------------------------------------
-        # 10. DISPLAY OBJECTS ONE BY ONE
-        # --------------------------------------------------
-
-        for index, (object_name, confidence) in enumerate(
-            detected_objects,
-            start=1
-        ):
-
-            st.write(
-                f"**{index}. {object_name.capitalize()}** "
-                f"— {confidence:.2%}"
-            )
-
-    else:
-
-        st.warning(
-            "No objects were detected."
+            format="bgr24"
         )
 
 
 # --------------------------------------------------
-# 11. INFORMATION SECTION
+# START CAMERA
+# --------------------------------------------------
+
+webrtc_streamer(
+    key="object-detection",
+    video_processor_factory=ObjectDetectionProcessor
+)
+
+
+# --------------------------------------------------
+# INFORMATION
 # --------------------------------------------------
 
 st.divider()
 
-st.subheader("About Aspect 1")
+st.subheader("Current Stage")
 
 st.write(
     """
-    This is the first stage of the AI Accessibility Assistant.
+    The system currently performs real-time object detection.
 
-    The system currently uses YOLO to identify objects
-    visible in the camera image.
+    Camera
+        ↓
+    Video Frames
+        ↓
+    YOLO
+        ↓
+    Object Detection
+        ↓
+    Bounding Boxes
+    """
+)
 
-    Future versions will add:
+st.subheader("Next Stages")
 
-    • Spatial awareness and distance estimation
-    • OCR for reading text
-    • Vision-language understanding
+st.write(
+    """
+    • Spatial awareness
+    • Distance estimation
+    • OCR
+    • Scene understanding
     • AI reasoning
     • Text-to-speech
     """
