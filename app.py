@@ -1,5 +1,4 @@
 import base64
-
 import cv2
 import numpy as np
 import streamlit as st
@@ -22,12 +21,11 @@ st.set_page_config(
 # ============================================================
 
 st.title("👁️ AI Accessibility Assistant")
-
 st.subheader("Aspect 1 — Real-Time Object Awareness")
 
 st.write(
-    "Point the camera at your surroundings. "
-    "YOLO will detect the objects in view."
+    "Point your camera at your surroundings. "
+    "YOLO will detect objects in view."
 )
 
 
@@ -37,7 +35,8 @@ st.write(
 
 @st.cache_resource
 def load_model():
-    return YOLO("yolo11n.pt")
+    model = YOLO("yolo11n.pt")
+    return model
 
 
 model = load_model()
@@ -48,11 +47,7 @@ model = load_model()
 # ============================================================
 
 camera_component = st.components.v2.component(
-    name="live_rear_camera",
-
-    # --------------------------------------------------------
-    # HTML
-    # --------------------------------------------------------
+    name="live_rear_camera_v3",
 
     html="""
     <div id="camera-container">
@@ -74,10 +69,6 @@ camera_component = st.components.v2.component(
 
     </div>
     """,
-
-    # --------------------------------------------------------
-    # CSS
-    # --------------------------------------------------------
 
     css="""
     #camera-container {
@@ -116,16 +107,12 @@ camera_component = st.components.v2.component(
     }
     """,
 
-    # --------------------------------------------------------
-    # JAVASCRIPT
-    # --------------------------------------------------------
-
     js="""
     export default function(component) {
 
         const {
             parentElement,
-            setTriggerValue
+            setStateValue
         } = component;
 
 
@@ -146,6 +133,8 @@ camera_component = st.components.v2.component(
 
         let running = true;
 
+        let captureTimer = null;
+
 
         // ====================================================
         // START CAMERA
@@ -159,9 +148,9 @@ camera_component = st.components.v2.component(
                     "Requesting rear camera...";
 
 
-                /*
-                 * Request the BACK camera.
-                 */
+                // --------------------------------------------
+                // Try rear/environment camera first
+                // --------------------------------------------
 
                 stream =
                     await navigator.mediaDevices.getUserMedia({
@@ -183,8 +172,8 @@ camera_component = st.components.v2.component(
                             },
 
                             frameRate: {
-                                ideal: 15,
-                                max: 20
+                                ideal: 10,
+                                max: 15
                             }
                         }
                     });
@@ -211,16 +200,14 @@ camera_component = st.components.v2.component(
                 );
 
 
-                /*
-                 * Fallback for computers without
-                 * an environment/rear camera.
-                 */
+                // --------------------------------------------
+                // Fallback camera
+                // --------------------------------------------
 
                 try {
 
                     status.textContent =
-                        "Rear camera unavailable. "
-                        + "Trying available camera...";
+                        "Trying available camera...";
 
 
                     stream =
@@ -239,8 +226,8 @@ camera_component = st.components.v2.component(
                                 },
 
                                 frameRate: {
-                                    ideal: 15,
-                                    max: 20
+                                    ideal: 10,
+                                    max: 15
                                 }
                             }
                         });
@@ -273,7 +260,7 @@ camera_component = st.components.v2.component(
 
 
         // ====================================================
-        // CAPTURE FRAME
+        // CAPTURE CAMERA FRAMES
         // ====================================================
 
         function startCapture() {
@@ -290,13 +277,17 @@ camera_component = st.components.v2.component(
                     HTMLMediaElement.HAVE_CURRENT_DATA
                 ) {
 
-                    /*
-                     * Capture at 640 × 480.
-                     */
+                    // ----------------------------------------
+                    // Fixed frame size
+                    // ----------------------------------------
 
                     canvas.width = 640;
                     canvas.height = 480;
 
+
+                    // ----------------------------------------
+                    // Copy video frame to canvas
+                    // ----------------------------------------
 
                     ctx.drawImage(
                         video,
@@ -307,41 +298,43 @@ camera_component = st.components.v2.component(
                     );
 
 
-                    /*
-                     * Convert the frame to JPEG.
-                     */
+                    // ----------------------------------------
+                    // Convert to JPEG
+                    // ----------------------------------------
 
                     const image =
                         canvas.toDataURL(
                             "image/jpeg",
-                            0.65
+                            0.70
                         );
 
 
-                    /*
-                     * IMPORTANT:
-                     *
-                     * A camera frame is an EVENT.
-                     * Therefore we use a trigger,
-                     * not persistent state.
-                     */
+                    // ----------------------------------------
+                    // IMPORTANT
+                    //
+                    // This is continuous camera STATE,
+                    // not a one-time button/event.
+                    // ----------------------------------------
 
-                    setTriggerValue(
+                    setStateValue(
                         "frame",
                         image
                     );
                 }
 
 
-                /*
-                 * Send approximately 5 frames
-                 * per second.
-                 */
+                // --------------------------------------------
+                // Approximately 4 FPS
+                //
+                // We intentionally start slower so that
+                // Python has enough time to run YOLO.
+                // --------------------------------------------
 
-                setTimeout(
-                    capture,
-                    200
-                );
+                captureTimer =
+                    setTimeout(
+                        capture,
+                        250
+                    );
             }
 
 
@@ -350,7 +343,7 @@ camera_component = st.components.v2.component(
 
 
         // ====================================================
-        // START CAMERA
+        // START
         // ====================================================
 
         startCamera();
@@ -363,6 +356,14 @@ camera_component = st.components.v2.component(
         return () => {
 
             running = false;
+
+
+            if (captureTimer) {
+
+                clearTimeout(
+                    captureTimer
+                );
+            }
 
 
             if (stream) {
@@ -380,7 +381,7 @@ camera_component = st.components.v2.component(
 
 
 # ============================================================
-# MOUNT COMPONENT
+# MOUNT CAMERA COMPONENT
 # ============================================================
 
 camera_result = camera_component(
@@ -392,209 +393,445 @@ camera_result = camera_component(
 
 
 # ============================================================
-# GET FRAME FROM COMPONENT
+# GET CURRENT FRAME
 # ============================================================
 
 frame_data = camera_result.frame
 
 
 # ============================================================
-# SHOW COMMUNICATION STATUS
+# DEBUG: DID PYTHON RECEIVE THE FRAME?
 # ============================================================
 
-if frame_data:
+if not frame_data:
 
-    st.caption("🟢 Camera frame received by Python")
+    st.info(
+        "Waiting for the first camera frame..."
+    )
 
-
-    try:
-
-        # ----------------------------------------------------
-        # Remove Base64 header
-        # ----------------------------------------------------
-
-        if "," in frame_data:
-
-            encoded_image = frame_data.split(
-                ",",
-                1
-            )[1]
-
-        else:
-
-            encoded_image = frame_data
+    st.stop()
 
 
-        # ----------------------------------------------------
-        # Base64 → bytes
-        # ----------------------------------------------------
-
-        image_bytes = base64.b64decode(
-            encoded_image
-        )
+st.success(
+    "🟢 Camera frame received by Python"
+)
 
 
-        # ----------------------------------------------------
-        # Bytes → NumPy
-        # ----------------------------------------------------
+# ============================================================
+# DECODE BASE64 IMAGE
+# ============================================================
 
-        image_array = np.frombuffer(
-            image_bytes,
-            dtype=np.uint8
-        )
+try:
 
+    # Remove:
+    # data:image/jpeg;base64,...
 
-        # ----------------------------------------------------
-        # JPEG → OpenCV
-        # ----------------------------------------------------
+    if "," in frame_data:
 
-        frame = cv2.imdecode(
-            image_array,
-            cv2.IMREAD_COLOR
-        )
+        encoded_image = frame_data.split(
+            ",",
+            1
+        )[1]
 
+    else:
 
-        if frame is None:
-
-            st.error(
-                "Python received the frame, "
-                "but OpenCV could not decode it."
-            )
-
-        else:
-
-            # =================================================
-            # YOLO
-            # =================================================
-
-            results = model(
-                frame,
-
-                # Keep 640 for accuracy.
-                imgsz=640,
-
-                # Confidence threshold.
-                conf=0.35,
-
-                verbose=False,
-            )
+        encoded_image = frame_data
 
 
-            result = results[0]
+    # Base64 → bytes
+
+    image_bytes = base64.b64decode(
+        encoded_image
+    )
 
 
-            # =================================================
-            # DRAW BOUNDING BOXES
-            # =================================================
+    # Bytes → NumPy array
 
-            annotated_frame = result.plot()
-
-
-            # =================================================
-            # BGR → RGB
-            # =================================================
-
-            annotated_frame = cv2.cvtColor(
-                annotated_frame,
-                cv2.COLOR_BGR2RGB
-            )
+    image_array = np.frombuffer(
+        image_bytes,
+        dtype=np.uint8
+    )
 
 
-            # =================================================
-            # DISPLAY
-            # =================================================
+    # JPEG → OpenCV image
 
-            st.subheader("🔎 Live Detection")
-
-
-            st.image(
-                annotated_frame,
-                channels="RGB",
-                use_container_width=True,
-            )
+    frame = cv2.imdecode(
+        image_array,
+        cv2.IMREAD_COLOR
+    )
 
 
-            # =================================================
-            # OBJECT LIST
-            # =================================================
-
-            st.subheader("Objects Detected")
-
-
-            if (
-                result.boxes is not None
-                and len(result.boxes) > 0
-            ):
-
-                detected_objects = []
-
-
-                for box in result.boxes:
-
-                    class_id = int(
-                        box.cls[0].item()
-                    )
-
-
-                    confidence = float(
-                        box.conf[0].item()
-                    )
-
-
-                    object_name = model.names[
-                        class_id
-                    ]
-
-
-                    detected_objects.append(
-                        (
-                            object_name,
-                            confidence
-                        )
-                    )
-
-
-                # ------------------------------------------------
-                # PRINT EACH OBJECT
-                # ------------------------------------------------
-
-                for index, (
-                    name,
-                    confidence
-                ) in enumerate(
-                    detected_objects,
-                    start=1
-                ):
-
-                    st.write(
-                        f"**{index}. "
-                        f"{name.capitalize()}** "
-                        f"— {confidence:.1%}"
-                    )
-
-
-            else:
-
-                st.info(
-                    "No objects detected in this frame."
-                )
-
-
-    except Exception as error:
+    if frame is None:
 
         st.error(
-            "YOLO processing error"
+            "Python received the camera frame, "
+            "but OpenCV could not decode it."
         )
 
-        st.code(
-            str(error)
+        st.stop()
+
+
+except Exception as error:
+
+    st.error(
+        "Camera frame decoding failed."
+    )
+
+    st.code(
+        str(error)
+    )
+
+    st.stop()
+
+
+# ============================================================
+# SHOW RAW FRAME
+# ============================================================
+
+st.caption(
+    f"Frame received successfully: "
+    f"{frame.shape[1]} × {frame.shape[0]}"
+)
+
+
+# ============================================================
+# YOLO DETECTION
+# ============================================================
+
+try:
+
+    results = model.predict(
+
+        source=frame,
+
+        imgsz=640,
+
+        conf=0.15,
+
+        iou=0.45,
+
+        verbose=False,
+
+        device="cpu",
+    )
+
+
+except Exception as error:
+
+    st.error(
+        "YOLO inference failed."
+    )
+
+    st.code(
+        str(error)
+    )
+
+    st.stop()
+
+
+# ============================================================
+# GET RESULT
+# ============================================================
+
+result = results[0]
+
+
+# ============================================================
+# DETECTION INFORMATION
+# ============================================================
+
+if result.boxes is None:
+
+    detection_count = 0
+
+else:
+
+    detection_count = len(
+        result.boxes
+    )
+
+
+st.caption(
+    f"YOLO detections: {detection_count}"
+)
+
+
+# ============================================================
+# DRAW DETECTIONS MANUALLY
+# ============================================================
+
+annotated_frame = frame.copy()
+
+detected_objects = []
+
+
+if (
+    result.boxes is not None
+    and len(result.boxes) > 0
+):
+
+    for box in result.boxes:
+
+        # -----------------------------------------------
+        # Coordinates
+        # -----------------------------------------------
+
+        x1, y1, x2, y2 = (
+            box.xyxy[0]
+            .cpu()
+            .numpy()
+            .astype(int)
+        )
+
+
+        # -----------------------------------------------
+        # Confidence
+        # -----------------------------------------------
+
+        confidence = float(
+            box.conf[0]
+            .cpu()
+            .item()
+        )
+
+
+        # -----------------------------------------------
+        # Class ID
+        # -----------------------------------------------
+
+        class_id = int(
+            box.cls[0]
+            .cpu()
+            .item()
+        )
+
+
+        # -----------------------------------------------
+        # Class name
+        # -----------------------------------------------
+
+        object_name = model.names[
+            class_id
+        ]
+
+
+        # -----------------------------------------------
+        # Store detection
+        # -----------------------------------------------
+
+        detected_objects.append(
+            {
+                "name": object_name,
+                "confidence": confidence,
+                "box": (
+                    x1,
+                    y1,
+                    x2,
+                    y2
+                )
+            }
+        )
+
+
+        # -----------------------------------------------
+        # Draw bounding box
+        # -----------------------------------------------
+
+        cv2.rectangle(
+
+            annotated_frame,
+
+            (x1, y1),
+
+            (x2, y2),
+
+            (0, 255, 0),
+
+            3,
+        )
+
+
+        # -----------------------------------------------
+        # Label
+        # -----------------------------------------------
+
+        label = (
+            f"{object_name} "
+            f"{confidence:.0%}"
+        )
+
+
+        # -----------------------------------------------
+        # Label size
+        # -----------------------------------------------
+
+        (
+            text_width,
+            text_height
+        ), baseline = cv2.getTextSize(
+
+            label,
+
+            cv2.FONT_HERSHEY_SIMPLEX,
+
+            0.7,
+
+            2,
+        )
+
+
+        # -----------------------------------------------
+        # Label background
+        # -----------------------------------------------
+
+        label_y1 = max(
+            0,
+            y1 - text_height - baseline - 8
+        )
+
+
+        label_y2 = y1
+
+
+        cv2.rectangle(
+
+            annotated_frame,
+
+            (x1, label_y1),
+
+            (
+                x1 + text_width + 10,
+                label_y2
+            ),
+
+            (0, 255, 0),
+
+            -1,
+        )
+
+
+        # -----------------------------------------------
+        # Label text
+        # -----------------------------------------------
+
+        cv2.putText(
+
+            annotated_frame,
+
+            label,
+
+            (
+                x1 + 5,
+                y1 - 6
+            ),
+
+            cv2.FONT_HERSHEY_SIMPLEX,
+
+            0.7,
+
+            (0, 0, 0),
+
+            2,
+
+            cv2.LINE_AA,
+        )
+
+
+# ============================================================
+# DISPLAY DETECTED FRAME
+# ============================================================
+
+st.subheader("🔎 YOLO Detection")
+
+annotated_rgb = cv2.cvtColor(
+    annotated_frame,
+    cv2.COLOR_BGR2RGB
+)
+
+st.image(
+    annotated_rgb,
+    channels="RGB",
+    use_container_width=True,
+)
+
+
+# ============================================================
+# OBJECT LIST
+# ============================================================
+
+st.subheader("Objects Detected")
+
+
+if detected_objects:
+
+    for index, detection in enumerate(
+        detected_objects,
+        start=1
+    ):
+
+        name = detection["name"]
+
+        confidence = detection[
+            "confidence"
+        ]
+
+
+        st.write(
+            f"**{index}. "
+            f"{name.capitalize()}** "
+            f"— {confidence:.1%}"
         )
 
 else:
 
     st.info(
-        "Waiting for the first camera frame..."
+        "No objects detected in this frame."
     )
+
+
+# ============================================================
+# DEBUG INFORMATION
+# ============================================================
+
+with st.expander("🔧 Detection Debug Information"):
+
+    st.write(
+        "Frame received:",
+        True
+    )
+
+    st.write(
+        "Frame shape:",
+        frame.shape
+    )
+
+    st.write(
+        "YOLO model:",
+        "yolo11n.pt"
+    )
+
+    st.write(
+        "Confidence threshold:",
+        0.15
+    )
+
+    st.write(
+        "Detection count:",
+        detection_count
+    )
+
+    if detected_objects:
+
+        st.write(
+            "Detected classes:"
+        )
+
+        for detection in detected_objects:
+
+            st.write(
+                f"- {detection['name']} "
+                f"({detection['confidence']:.1%})"
+            )
 
 
 # ============================================================
@@ -604,6 +841,6 @@ else:
 st.divider()
 
 st.caption(
-    "Rear Camera → Frame → OpenCV → "
+    "Rear Camera → Python Frame → "
     "YOLO → Bounding Boxes → Object List"
 )
