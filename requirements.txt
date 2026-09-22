@@ -1,5 +1,6 @@
-streamlit
-streamlit-webrtc
+streamlit>=1.51.0
+streamlit-webrtc>=0.63.0
 ultralytics
 opencv-python-headless
+av>=15.1.0
 numpy
