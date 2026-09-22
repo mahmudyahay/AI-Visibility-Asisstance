@@ -35,20 +35,17 @@ image = camera_input_live()
 
 if image is not None:
 
-    # Convert captured image to NumPy
-    frame = np.array(
-        Image.open(image)
-    )
+    # Convert camera image to NumPy
+    frame = np.array(Image.open(image))
 
     # RGB → BGR for OpenCV / YOLO
-    frame = cv2.cvtColor(
-        frame,
-        cv2.COLOR_RGB2BGR
-    )
+    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
     # YOLO detection
+    # Smaller image size = faster inference
     results = model(
         frame,
+        imgsz=320,
         conf=0.40,
         verbose=False
     )
@@ -64,13 +61,14 @@ if image is not None:
         cv2.COLOR_BGR2RGB
     )
 
+    # Display detected image
     st.image(
         annotated_frame,
         channels="RGB",
         use_container_width=True
     )
 
-    # Object list
+    # Display detected objects
     st.subheader("Objects Detected")
 
     if result.boxes is not None and len(result.boxes) > 0:
@@ -103,6 +101,7 @@ if image is not None:
 st.divider()
 
 st.caption(
-    "Aspect 1: Camera → OpenCV → YOLO → "
+    "Camera → OpenCV → YOLO → "
     "Object Detection → Bounding Boxes"
 )
+
