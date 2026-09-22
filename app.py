@@ -4,7 +4,6 @@ import streamlit as st
 from ultralytics import YOLO
 from streamlit_webrtc import webrtc_streamer
 
-
 # ============================================================
 # PAGE CONFIGURATION
 # ============================================================
