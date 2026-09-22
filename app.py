@@ -1,55 +1,38 @@
-import os
-
 import av
 import streamlit as st
-
 from ultralytics import YOLO
-from streamlit_webrtc import webrtc_streamer
+from streamlit_webrtc import webrtc_streamer, WebRtcMode
 
-st.title("👁️ Real-Time Object Detection")
+st.set_page_config(page_title="AI Accessibility Assistant", page_icon="👁️", layout="wide")
 
-# ------------------------------------------------------------
-# Load YOLO once and cache it across reruns.
-# ------------------------------------------------------------
+st.title("👁️ AI Accessibility Assistant")
+st.caption("Aspect 1 — Real-Time Object Awareness")
+st.write("Start the camera and point it at objects around you.")
+
 @st.cache_resource
 def load_model():
     return YOLO("yolo11n.pt")
 
 model = load_model()
 
-# ------------------------------------------------------------
-# Runs on every incoming video frame: detect objects, draw
-# boxes + labels, return the annotated frame.
-# ------------------------------------------------------------
 def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
-    img = frame.to_ndarray(format="bgr24")
-    results = model(img, conf=0.40, verbose=False)
-    annotated = results[0].plot()  # draws boxes + class names + confidence
+    image = frame.to_ndarray(format="bgr24")
+    results = model(image, conf=0.40, verbose=False)
+    annotated = results[0].plot()
     return av.VideoFrame.from_ndarray(annotated, format="bgr24")
 
-# ------------------------------------------------------------
-# TURN server: REQUIRED on Streamlit Community Cloud.
-# Without one, the "Connection is taking longer than expected"
-# error you saw will keep happening -- the platform blocks the
-# direct browser-to-server path WebRTC normally uses.
-#
-# Add these two values in your app's Settings -> Secrets:
-#   CLOUDFLARE_TURN_KEY_ID = "..."
-#   CLOUDFLARE_TURN_KEY_API_TOKEN = "..."
-# Get them free at the Cloudflare dashboard -> Realtime -> TURN.
-# ------------------------------------------------------------
-if "CLOUDFLARE_TURN_KEY_ID" in st.secrets:
-    os.environ["CLOUDFLARE_TURN_KEY_ID"] = st.secrets["CLOUDFLARE_TURN_KEY_ID"]
-    os.environ["CLOUDFLARE_TURN_KEY_API_TOKEN"] = st.secrets["CLOUDFLARE_TURN_KEY_API_TOKEN"]
-else:
-    st.warning(
-        "No TURN credentials in Secrets -- the camera connection "
-        "will likely time out on Streamlit Community Cloud."
-    )
-
 webrtc_streamer(
-    key="object-detection",
-    video_frame_callback=video_frame_callback,
+    key="accessibility-camera",
+    mode=WebRtcMode.SENDRECV,
+    rtc_configuration={
+        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+    },
     media_stream_constraints={"video": True, "audio": False},
+    video_frame_callback=video_frame_callback,
     async_processing=True,
 )
+
+st.divider()
+st.subheader("Aspect 1 complete")
+st.write("The app processes the live camera feed with YOLO and displays detected objects with bounding boxes, names, and confidence scores.")
+st.caption("Later aspects will add spatial awareness, OCR, scene understanding, reasoning, and speech.")
