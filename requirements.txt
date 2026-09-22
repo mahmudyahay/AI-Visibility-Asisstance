@@ -1,6 +1,16 @@
+# --- CPU-only PyTorch wheels ---
+# ultralytics depends on torch/torchvision. The default PyPI wheels
+# include CUDA binaries and can be 2GB+, which regularly blows past
+# Streamlit Community Cloud's build size/time limits and causes the
+# deploy to fail or the app to crash on boot. Pulling the CPU-only
+# build from PyTorch's own index keeps the install small and fast.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.4.1
+torchvision==0.19.1
+
 streamlit==1.51.0
 streamlit-webrtc==0.63.11
-ultralytics
+ultralytics==8.4.53
 opencv-python-headless==4.12.0.88
 av>=15.1.0
 numpy
