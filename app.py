@@ -1,23 +1,23 @@
 import cv2
 import numpy as np
 import streamlit as st
-from ultralytics import YOLO
 from PIL import Image
+from ultralytics import YOLO
+from camera_input_live import camera_input_live
 
 
 st.set_page_config(
     page_title="AI Accessibility Assistant",
     page_icon="👁️",
-    layout="wide"
+    layout="wide",
 )
 
-
 st.title("👁️ AI Accessibility Assistant")
-st.subheader("Aspect 1 — Object Awareness")
+st.subheader("Aspect 1 — Real-Time Object Awareness")
 
 st.write(
-    "Capture an image with your camera. "
-    "YOLO will detect and label the objects in the image."
+    "Point your camera at objects around you. "
+    "YOLO will continuously detect what is visible."
 )
 
 
@@ -29,22 +29,24 @@ def load_model():
 model = load_model()
 
 
-camera_image = st.camera_input(
-    "📷 Capture your surroundings"
-)
+# Live camera
+image = camera_input_live()
 
 
-if camera_image is not None:
+if image is not None:
 
-    image = Image.open(camera_image)
+    # Convert captured image to NumPy
+    frame = np.array(
+        Image.open(image)
+    )
 
-    frame = np.array(image)
-
+    # RGB → BGR for OpenCV / YOLO
     frame = cv2.cvtColor(
         frame,
         cv2.COLOR_RGB2BGR
     )
 
+    # YOLO detection
     results = model(
         frame,
         conf=0.40,
@@ -53,14 +55,14 @@ if camera_image is not None:
 
     result = results[0]
 
+    # Draw bounding boxes
     annotated_frame = result.plot()
 
+    # BGR → RGB for Streamlit
     annotated_frame = cv2.cvtColor(
         annotated_frame,
         cv2.COLOR_BGR2RGB
     )
-
-    st.subheader("Detected Scene")
 
     st.image(
         annotated_frame,
@@ -68,15 +70,15 @@ if camera_image is not None:
         use_container_width=True
     )
 
+    # Object list
     st.subheader("Objects Detected")
 
-    boxes = result.boxes
+    if result.boxes is not None and len(result.boxes) > 0:
 
-    if boxes is not None and len(boxes) > 0:
-
-        detected_objects = []
-
-        for box in boxes:
+        for index, box in enumerate(
+            result.boxes,
+            start=1
+        ):
 
             class_id = int(
                 box.cls[0].item()
@@ -88,37 +90,19 @@ if camera_image is not None:
 
             object_name = model.names[class_id]
 
-            detected_objects.append(
-                (
-                    object_name,
-                    confidence
-                )
-            )
-
-        for index, (name, confidence) in enumerate(
-            detected_objects,
-            start=1
-        ):
-
             st.write(
-                f"**{index}. {name.capitalize()}** "
+                f"**{index}. "
+                f"{object_name.capitalize()}** "
                 f"— {confidence:.1%}"
             )
 
     else:
-
-        st.warning(
-            "No objects were detected."
-        )
+        st.info("No objects detected.")
 
 
 st.divider()
 
-st.subheader("Current Capability")
-
-st.write(
-    """
-    Camera → Image Capture → OpenCV → YOLO
-    → Object Detection → Bounding Boxes
-    """
+st.caption(
+    "Aspect 1: Camera → OpenCV → YOLO → "
+    "Object Detection → Bounding Boxes"
 )
