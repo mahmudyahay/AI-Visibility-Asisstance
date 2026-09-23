@@ -1,5 +1,6 @@
 import logging
 import threading
+import time
 
 import av
 import cv2
@@ -10,17 +11,12 @@ import streamlit.components.v1 as components
 from ultralytics import YOLO
 from streamlit_webrtc import webrtc_streamer
 
-try:
-    import pytesseract
-except ImportError:
-    pytesseract = None
-
 logger = logging.getLogger(__name__)
 
 st.set_page_config(page_title="AI Accessibility Assistant", page_icon="👁️", layout="wide")
 
 st.title("👁️ AI Accessibility Assistant")
-st.write("Full pipeline: Object Awareness → Spatial Awareness → Scene/Text Understanding → Voice Assistant")
+st.write("Object Awareness → Spatial Awareness → Automatic Spoken Guidance")
 
 # ============================================================
 # PHASE 1+2: YOLO object detection + spatial zones (continuous)
@@ -51,13 +47,9 @@ def get_distance_label(box_area: float, frame_area: float) -> str:
 
 
 class FrameStore:
-    """
-    Thread-safe hand-off between the WebRTC video thread (which calls
-    video_frame_callback continuously) and the main Streamlit thread
-    (which runs when a button is clicked). Phase 3/4 buttons read the
-    most recent raw frame + detections from here rather than trying
-    to re-run detection on demand.
-    """
+    """Thread-safe hand-off between the WebRTC video thread and the
+    main Streamlit thread, which reads the latest detections on a
+    timer to decide what to say."""
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -165,26 +157,10 @@ webrtc_streamer(
 st.divider()
 
 # ============================================================
-# PHASE 3: Text & Scene Understanding (on-demand)
+# PHASE 3/4 (simplified): automatic spoken guidance
+# Free, local, rule-based -- built directly from the YOLO
+# detections, no external API or API key needed.
 # ============================================================
-
-def read_text(img_bgr):
-    if pytesseract is None:
-        return None, "pytesseract package failed to import -- check requirements.txt was installed."
-    try:
-        pytesseract.get_tesseract_version()
-    except Exception:
-        return None, (
-            "Tesseract OCR engine not found on this server. Make sure "
-            "'tesseract-ocr' is in packages.txt and reboot the app."
-        )
-    try:
-        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-        text = pytesseract.image_to_string(gray).strip()
-        return text, None
-    except Exception as e:
-        return None, str(e)
-
 
 def zone_phrase(zone: str) -> str:
     return {"LEFT": "on your left", "CENTER": "in front of you", "RIGHT": "on your right"}[zone]
@@ -195,15 +171,6 @@ def distance_phrase(distance: str) -> str:
 
 
 def generate_description(detections):
-    """
-    Builds a plain-language spoken description directly from the
-    YOLO detections -- no external API needed, so this works with
-    zero cost and no API key. Keeps at most one mention per
-    (object, zone) pair, picking the highest-confidence detection.
-    """
-    if not detections:
-        return "I don't see anything clearly right now."
-
     best = {}
     for d in detections:
         key = (d["label"], d["zone"])
@@ -223,28 +190,6 @@ def generate_description(detections):
     return "There is " + ", ".join(phrases[:-1]) + f", and {phrases[-1]}."
 
 
-def describe_scene(img_bgr, detections):
-    """
-    Free, local, rule-based description built from detections.
-    (A previous version of this function called the paid Claude
-    API for a more natural, richer description -- that's an
-    optional upgrade path, not a requirement; see the comment
-    below if you want to re-enable it later.)
-    """
-    return generate_description(detections), None
-
-    # ---- Optional upgrade: AI-generated description ----
-    # If you later get Anthropic API credit (or want to use a
-    # provider with a real free tier, like Google's Gemini API),
-    # you can swap the "return" above for a call that sends
-    # img_bgr + detections to that provider instead, for a more
-    # natural-sounding, context-aware description.
-
-
-# ============================================================
-# PHASE 4: Voice output (browser-side text-to-speech)
-# ============================================================
-
 def speak(text: str):
     safe_text = text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
     components.html(
@@ -259,47 +204,50 @@ def speak(text: str):
     )
 
 
-st.subheader("Ask the Assistant")
-col1, col2 = st.columns(2)
+st.subheader("Automatic Spoken Guidance")
+st.caption("Speaks automatically when something is detected. Stays silent when the view is empty.")
 
-with col1:
-    if st.button("📖 Read Text Around Me", use_container_width=True):
-        frame, _ = frame_store.get()
-        if frame is None:
-            st.warning("No camera frame yet -- start the camera above first.")
-        else:
-            with st.spinner("Reading text..."):
-                text, err = read_text(frame)
-            if err:
-                st.error(err)
-            elif text:
-                st.success(text)
-                speak(text)
-            else:
-                st.info("No readable text detected.")
+if "last_spoken" not in st.session_state:
+    st.session_state.last_spoken = None
+if "last_spoken_time" not in st.session_state:
+    st.session_state.last_spoken_time = 0.0
 
-with col2:
-    if st.button("🗣️ Describe My Surroundings", use_container_width=True):
-        frame, detections = frame_store.get()
-        if frame is None:
-            st.warning("No camera frame yet -- start the camera above first.")
-        else:
-            with st.spinner("Analyzing scene..."):
-                description, err = describe_scene(frame, detections)
-            if err:
-                st.error(f"Could not generate description: {err}")
-            else:
-                st.success(description)
-                speak(description)
+ANNOUNCE_COOLDOWN = 4  # seconds before repeating an unchanged description
+
+
+@st.fragment(run_every=2)
+def auto_narrate():
+    placeholder = st.empty()
+    frame, detections = frame_store.get()
+
+    if frame is None:
+        placeholder.info("Waiting for the camera to start...")
+        return
+
+    if not detections:
+        st.session_state.last_spoken = None  # so the next detection is announced fresh
+        placeholder.write("🤫 Quiet — nothing detected right now.")
+        return
+
+    description = generate_description(detections)
+    now = time.time()
+    changed = description != st.session_state.last_spoken
+    stale = (now - st.session_state.last_spoken_time) > ANNOUNCE_COOLDOWN
+
+    if changed or stale:
+        st.session_state.last_spoken = description
+        st.session_state.last_spoken_time = now
+        speak(description)
+
+    placeholder.success(description)
+
+
+auto_narrate()
 
 st.divider()
 st.subheader("Pipeline")
 st.write(
     """
-    **Continuous (every frame):** Camera → WebRTC → YOLO → Bounding boxes + LEFT/CENTER/RIGHT, NEAR/MID/FAR
-
-    **On demand (button press):**
-    - *Read Text*: current frame → OCR (Tesseract) → spoken aloud
-    - *Describe Surroundings*: current frame + detections → Claude (vision) → spoken aloud
+    Camera → WebRTC → YOLO → LEFT/CENTER/RIGHT + NEAR/MID/FAR → spoken description (auto, every ~2s when something is detected)
     """
 )
