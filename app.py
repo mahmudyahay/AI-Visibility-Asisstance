@@ -1,4 +1,3 @@
-import base64
 import logging
 import threading
 
@@ -22,13 +21,6 @@ st.set_page_config(page_title="AI Accessibility Assistant", page_icon="👁️",
 
 st.title("👁️ AI Accessibility Assistant")
 st.write("Full pipeline: Object Awareness → Spatial Awareness → Scene/Text Understanding → Voice Assistant")
-
-if not st.secrets.get("ANTHROPIC_API_KEY"):
-    st.warning(
-        "No ANTHROPIC_API_KEY set in Secrets. Phases 3-4 (scene description) "
-        "will not work until you add one. Get a key at console.anthropic.com "
-        "and add it in Settings -> Secrets."
-    )
 
 # ============================================================
 # PHASE 1+2: YOLO object detection + spatial zones (continuous)
@@ -178,7 +170,14 @@ st.divider()
 
 def read_text(img_bgr):
     if pytesseract is None:
-        return None, "pytesseract is not installed."
+        return None, "pytesseract package failed to import -- check requirements.txt was installed."
+    try:
+        pytesseract.get_tesseract_version()
+    except Exception:
+        return None, (
+            "Tesseract OCR engine not found on this server. Make sure "
+            "'tesseract-ocr' is in packages.txt and reboot the app."
+        )
     try:
         gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
         text = pytesseract.image_to_string(gray).strip()
@@ -187,60 +186,59 @@ def read_text(img_bgr):
         return None, str(e)
 
 
+def zone_phrase(zone: str) -> str:
+    return {"LEFT": "on your left", "CENTER": "in front of you", "RIGHT": "on your right"}[zone]
+
+
+def distance_phrase(distance: str) -> str:
+    return {"NEAR": "close by", "MID": "", "FAR": "further away"}.get(distance, "")
+
+
+def generate_description(detections):
+    """
+    Builds a plain-language spoken description directly from the
+    YOLO detections -- no external API needed, so this works with
+    zero cost and no API key. Keeps at most one mention per
+    (object, zone) pair, picking the highest-confidence detection.
+    """
+    if not detections:
+        return "I don't see anything clearly right now."
+
+    best = {}
+    for d in detections:
+        key = (d["label"], d["zone"])
+        if key not in best or d["conf"] > best[key]["conf"]:
+            best[key] = d
+
+    phrases = []
+    for d in best.values():
+        phrase = f"a {d['label']} {zone_phrase(d['zone'])}"
+        dist = distance_phrase(d["distance"])
+        if dist:
+            phrase += f", {dist}"
+        phrases.append(phrase)
+
+    if len(phrases) == 1:
+        return f"There is {phrases[0]}."
+    return "There is " + ", ".join(phrases[:-1]) + f", and {phrases[-1]}."
+
+
 def describe_scene(img_bgr, detections):
-    api_key = st.secrets.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        return None, "No ANTHROPIC_API_KEY set in Secrets."
+    """
+    Free, local, rule-based description built from detections.
+    (A previous version of this function called the paid Claude
+    API for a more natural, richer description -- that's an
+    optional upgrade path, not a requirement; see the comment
+    below if you want to re-enable it later.)
+    """
+    return generate_description(detections), None
 
-    ok, buffer = cv2.imencode(".jpg", img_bgr)
-    if not ok:
-        return None, "Could not encode frame."
-    b64_image = base64.b64encode(buffer).decode("utf-8")
-
-    detections_text = (
-        ", ".join(f"{d['label']} ({d['zone']}, {d['distance']})" for d in detections)
-        or "no objects confidently detected by the object detector"
-    )
-
-    prompt = (
-        "You are an accessibility assistant describing a live camera scene to a "
-        "blind or low-vision user. A separate object detector found: "
-        f"{detections_text}. In 2-3 short spoken sentences, describe what's around "
-        "the user in plain, direct language, prioritizing navigation-relevant "
-        "details (people, obstacles, doors, hazards). Speak directly to the user, "
-        "e.g. 'There is a chair on your left.' Do not mention that you are an AI "
-        "or describe the image analytically -- just give the practical description."
-    )
-
-    try:
-        resp = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": "claude-sonnet-5",
-                "max_tokens": 300,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64_image}},
-                            {"type": "text", "text": prompt},
-                        ],
-                    }
-                ],
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        text = "".join(block.get("text", "") for block in data.get("content", []) if block.get("type") == "text")
-        return text.strip(), None
-    except Exception as e:
-        return None, str(e)
+    # ---- Optional upgrade: AI-generated description ----
+    # If you later get Anthropic API credit (or want to use a
+    # provider with a real free tier, like Google's Gemini API),
+    # you can swap the "return" above for a call that sends
+    # img_bgr + detections to that provider instead, for a more
+    # natural-sounding, context-aware description.
 
 
 # ============================================================
